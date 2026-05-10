@@ -1,0 +1,30 @@
+# API framework
+fastapi==0.115.5
+uvicorn[standard]==0.32.1
+
+# LangGraph + LangChain
+langgraph==0.2.53
+langchain-core==0.3.25
+
+# Gemini LLM
+google-generativeai==0.8.3
+
+# Embeddings + Vector search
+sentence-transformers==3.3.1
+faiss-cpu==1.9.0
+numpy==1.26.4
+
+# Data validation
+pydantic==2.10.3
+pydantic-settings==2.6.1
+
+# Env / config
+python-dotenv==1.0.1
+
+# HTTP client (for scraping or external calls)
+httpx==0.28.0
+
+# Testing
+pytest==8.3.4
+pytest-asyncio==0.24.0
+httpx  # also used as async test client
