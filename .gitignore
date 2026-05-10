@@ -25,6 +25,13 @@ env/
 .cache/
 models/
 
+# Generated catalog artifacts
+catalog/faiss.index
+catalog/metadata.pkl
+
+# Local assignment/source documents
+*.pdf
+
 # IDE
 .vscode/
 .idea/
