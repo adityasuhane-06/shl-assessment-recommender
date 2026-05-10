@@ -1,3 +1,13 @@
+---
+title: SHL Assessment Recommender
+emoji: 🧠
+colorFrom: blue
+colorTo: indigo
+sdk: docker
+app_port: 7860
+pinned: false
+---
+
 # SHL Assessment Recommender
 
 A stateless FastAPI service that recommends SHL Individual Test assessments through a conversational API. The system uses the provided SHL catalog, semantic retrieval, an LLM reasoning step, and deterministic validation to return grounded recommendations with catalog-only URLs.
