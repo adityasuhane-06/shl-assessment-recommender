@@ -18,36 +18,130 @@ from app import retriever
 from app.config import get_settings
 from app.schemas import RecommendationItem, keys_to_test_type, KEYS_TO_TYPE
 
-# ── LLM Client (OpenRouter) ───────────────────────────────────────────────────
+# ── LLM Clients ────────────────────────────────────────────────────────────────
 import httpx
+
+
+def _openrouter_keys() -> list[str]:
+    """Return OpenRouter keys in failover order without exposing secrets."""
+    settings = get_settings()
+    keys: list[str] = []
+
+    if settings.openrouter_api_key:
+        keys.append(settings.openrouter_api_key.strip())
+
+    if settings.openrouter_api_keys:
+        keys.extend(
+            key.strip()
+            for key in settings.openrouter_api_keys.split(",")
+            if key.strip()
+        )
+
+    deduped: list[str] = []
+    seen: set[str] = set()
+    for key in keys:
+        if key not in seen:
+            deduped.append(key)
+            seen.add(key)
+
+    return deduped
+
 
 def _call_openrouter(prompt: str) -> str:
     """Synchronous call to OpenRouter API using httpx."""
     settings = get_settings()
-    api_key = settings.openrouter_api_key
-    if not api_key:
-        raise RuntimeError("OPENROUTER_API_KEY is not set in .env")
+    api_keys = _openrouter_keys()
+    if not api_keys:
+        raise RuntimeError("OPENROUTER_API_KEY or OPENROUTER_API_KEYS is not set")
 
     url = "https://openrouter.ai/api/v1/chat/completions"
-    headers = {
-        "Authorization": f"Bearer {api_key}",
-        "Content-Type": "application/json",
-        "HTTP-Referer": settings.app_url,
-        "X-Title": "SHL Agent"
-    }
     data = {
-        "model": "google/gemini-2.5-flash",
+        "model": settings.openrouter_model,
         "messages": [{"role": "user", "content": prompt}],
         "temperature": 0.1,
         "max_tokens": 1500  # Cap output at 1500 tokens for optimal performance and budget safety
     }
 
     # Keep enough headroom for retrieval, parsing, and FastAPI response serialization.
+    per_key_timeout = min(settings.llm_timeout_seconds, max(8.0, settings.llm_timeout_seconds / len(api_keys)))
+    retry_statuses = {401, 402, 403, 429, 500, 502, 503, 504}
+    last_error: Exception | None = None
+
+    with httpx.Client(timeout=per_key_timeout) as client:
+        for api_key in api_keys:
+            headers = {
+                "Authorization": f"Bearer {api_key}",
+                "Content-Type": "application/json",
+                "HTTP-Referer": settings.app_url,
+                "X-Title": "SHL Agent",
+            }
+            try:
+                resp = client.post(url, headers=headers, json=data)
+                resp.raise_for_status()
+                body = resp.json()
+                return body["choices"][0]["message"]["content"]
+            except httpx.HTTPStatusError as exc:
+                last_error = exc
+                if exc.response.status_code not in retry_statuses:
+                    raise
+            except (httpx.TimeoutException, httpx.TransportError) as exc:
+                last_error = exc
+
+    raise RuntimeError(f"All OpenRouter keys failed: {last_error}")
+
+
+def _call_gemini(prompt: str) -> str:
+    """Fallback direct call to Google's Gemini API."""
+    settings = get_settings()
+    api_key = settings.gemini_api_key
+    if not api_key:
+        raise RuntimeError("GEMINI_API_KEY is not set")
+
+    url = (
+        "https://generativelanguage.googleapis.com/v1beta/models/"
+        f"{settings.gemini_model}:generateContent"
+    )
+    params = {"key": api_key}
+    data = {
+        "contents": [{"role": "user", "parts": [{"text": prompt}]}],
+        "generationConfig": {
+            "temperature": 0.1,
+            "maxOutputTokens": 1500,
+        },
+    }
+
     with httpx.Client(timeout=settings.llm_timeout_seconds) as client:
-        resp = client.post(url, headers=headers, json=data)
+        resp = client.post(url, params=params, json=data)
         resp.raise_for_status()
         body = resp.json()
-        return body["choices"][0]["message"]["content"]
+
+    candidates = body.get("candidates") or []
+    if not candidates:
+        raise RuntimeError("Gemini returned no candidates")
+
+    parts = candidates[0].get("content", {}).get("parts", [])
+    text = "".join(part.get("text", "") for part in parts)
+    if not text.strip():
+        raise RuntimeError("Gemini returned an empty response")
+
+    return text
+
+
+def _call_llm(prompt: str) -> str:
+    """Try OpenRouter first, then direct Gemini, before retrieval fallback."""
+    errors: list[str] = []
+
+    try:
+        return _call_openrouter(prompt)
+    except Exception as exc:
+        errors.append(f"OpenRouter failed: {exc}")
+
+    try:
+        return _call_gemini(prompt)
+    except Exception as exc:
+        errors.append(f"Gemini failed: {exc}")
+
+    raise RuntimeError(" | ".join(errors))
 
 
 # ── Agent State (LangGraph TypedDict) ────────────────────────────────────────
@@ -379,11 +473,11 @@ def retrieve_node(state: AgentState) -> AgentState:
 
 def llm_node(state: AgentState) -> AgentState:
     """
-    Calls OpenRouter instead of Google's native SDK. Returns intent, reply, recommendations, end_of_conversation.
+    Calls the configured LLM providers. Returns intent, reply, recommendations, end_of_conversation.
     """
     prompt = _build_prompt(state)
     try:
-        raw_text = _call_openrouter(prompt)
+        raw_text = _call_llm(prompt)
         parsed = _parse_llm_response(raw_text)
     except Exception as exc:
         return _fallback_response(state, str(exc))

@@ -10,7 +10,10 @@ from typing import Optional
 class Settings(BaseSettings):
     # API Keys
     gemini_api_key: Optional[str] = None
+    gemini_model: str = "gemini-2.5-flash"
     openrouter_api_key: Optional[str] = None
+    openrouter_api_keys: Optional[str] = None
+    openrouter_model: str = "openai/gpt-oss-120b:free"
     app_url: str = "http://localhost:8000"
 
     # FAISS / catalog paths
