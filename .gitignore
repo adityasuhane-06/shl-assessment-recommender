@@ -26,8 +26,8 @@ env/
 models/
 
 # Generated catalog artifacts
-# (Removed to ensure deployed environments have instant access to pre-built indexes)
-
+catalog/faiss.index
+catalog/metadata.pkl
 # Local assignment/source documents
 *.pdf
 
